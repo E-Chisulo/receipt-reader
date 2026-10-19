@@ -33,9 +33,22 @@ Plus a sheet per category (Food, Fuel, Health, etc.) for quick filtering.
 
 ## Requirements
 
-- macOS (the camera widget is browser-based; should work on other platforms but untested)
+**Platform:** macOS, Windows, or Linux. The camera widget runs in the browser so there's nothing platform-specific about the app itself. Ollama supports all three.
+
+**RAM:**
+- 3B model (`qwen2.5vl:3b`, the default): 8GB minimum, 16GB if you want it comfortable
+- 7B model (`qwen2.5vl:7b`, better accuracy): 16GB minimum
+
+**Storage:**
+- `qwen2.5vl:3b`: about 2.3GB for the model
+- `qwen2.5vl:7b`: about 4.7GB
+- The app and its Python environment add roughly 400MB on top
+
+**Processor:** Any reasonably modern CPU works. Inference is just slow without a GPU. Apple Silicon (M1 and up) runs it well through Metal. On Windows, an NVIDIA GPU speeds things up a lot but is not required — a decent CPU gets the job done, just takes 10-30 seconds per receipt instead of 2-5.
+
+**Software:**
 - Python 3.11+
-- [Ollama for macOS](https://ollama.com/download/mac)
+- [Ollama](https://ollama.com/download) (Mac, Windows, or Linux build)
 - A vision model pulled in Ollama, default is `qwen2.5vl:3b`
 
 ---
