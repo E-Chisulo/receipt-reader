@@ -10,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 import streamlit as st
+from filelock import FileLock
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -45,6 +46,7 @@ TRANSFER_HEADERS = ["transfer_id", "logged_at", "date", "amount", "currency", "f
 ACCOUNTS = ["FNB", "Zanaco", "Stanbic", "Standard Bank", "Airtel Money", "MTN Money", "Cash", "Other"]
 
 MEMORY_FILE = APP_DIR / "merchant_memory.json"
+WORKBOOK_LOCK = FileLock(str(APP_DIR / "receipts.xlsx.lock"), timeout=30)
 APP_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -157,20 +159,22 @@ def sha256(data: bytes) -> str:
 
 
 def append_deposit(path: Path, date: str, amount: float, currency: str, account: str, source: str, notes: str) -> str:
-    wb = load_workbook(path)
-    ws = wb["Deposits"]
     did = f"D{datetime.now().strftime('%Y%m%d%H%M%S%f')[:18]}"
-    ws.append([did, datetime.now().isoformat(), date, amount, currency, account, source, notes])
-    wb.save(path)
+    with WORKBOOK_LOCK:
+        wb = load_workbook(path)
+        ws = wb["Deposits"]
+        ws.append([did, datetime.now().isoformat(), date, amount, currency, account, source, notes])
+        wb.save(path)
     return did
 
 
 def append_transfer(path: Path, date: str, amount: float, currency: str, from_acc: str, to_acc: str, notes: str) -> str:
-    wb = load_workbook(path)
-    ws = wb["Transfers"]
     tid = f"T{datetime.now().strftime('%Y%m%d%H%M%S%f')[:18]}"
-    ws.append([tid, datetime.now().isoformat(), date, amount, currency, from_acc, to_acc, notes])
-    wb.save(path)
+    with WORKBOOK_LOCK:
+        wb = load_workbook(path)
+        ws = wb["Transfers"]
+        ws.append([tid, datetime.now().isoformat(), date, amount, currency, from_acc, to_acc, notes])
+        wb.save(path)
     return tid
 
 
@@ -400,9 +404,6 @@ def existing_hashes(path: Path):
 
 def append_to_excel(data: dict, path: Path, digest: str, status: str, notes: list):
     ensure_workbook(path)
-    wb = load_workbook(path)
-    ws = wb["Receipts"]
-    item_ws = wb["Items"]
     receipt_id = datetime.now().strftime("R%Y%m%d%H%M%S%f")
     captured_at = datetime.now().astimezone().isoformat(timespec="seconds")
     category = data.get("category") or "Other"
@@ -423,41 +424,43 @@ def append_to_excel(data: dict, path: Path, digest: str, status: str, notes: lis
         "validation_notes": "; ".join(notes),
         "image_sha256": digest,
     }
-    ws.append([row.get(h) for h in RECEIPT_HEADERS])
-
-    # Write to category sheet (auto-create if new category)
-    cat_ws = ensure_category_sheet(wb, category)
-    cat_ws.append([
-        data.get("receipt_date"),
-        data.get("merchant") or "Unknown",
-        num(data.get("total")),
-        data.get("currency") or CURRENCY_DEFAULT,
-        receipt_id,
-    ])
-    for i, item in enumerate(data.get("items") or [], start=1):
-        if not isinstance(item, dict):
-            continue
-        item_row = {
-            "receipt_id": receipt_id,
-            "line_number": i,
-            "item_description": item.get("description"),
-            "quantity": num(item.get("quantity")),
-            "unit_price": num(item.get("unit_price")),
-            "line_total": num(item.get("line_total")),
-            "tax_amount": num(item.get("tax_amount")),
-            "category": item.get("category"),
-        }
-        item_ws.append([item_row.get(h) for h in ITEM_HEADERS])
-    for sheet in (ws, item_ws):
-        sheet.freeze_panes = "A2"
-        sheet.auto_filter.ref = sheet.dimensions
-        for col_idx in range(1, sheet.max_column + 1):
-            max_len = 0
-            for cell in sheet[get_column_letter(col_idx)]:
-                if cell.value is not None:
-                    max_len = max(max_len, len(str(cell.value)))
-            sheet.column_dimensions[get_column_letter(col_idx)].width = min(max(max_len + 2, 12), 38)
-    wb.save(path)
+    with WORKBOOK_LOCK:
+        wb = load_workbook(path)
+        ws = wb["Receipts"]
+        item_ws = wb["Items"]
+        ws.append([row.get(h) for h in RECEIPT_HEADERS])
+        cat_ws = ensure_category_sheet(wb, category)
+        cat_ws.append([
+            data.get("receipt_date"),
+            data.get("merchant") or "Unknown",
+            num(data.get("total")),
+            data.get("currency") or CURRENCY_DEFAULT,
+            receipt_id,
+        ])
+        for i, item in enumerate(data.get("items") or [], start=1):
+            if not isinstance(item, dict):
+                continue
+            item_row = {
+                "receipt_id": receipt_id,
+                "line_number": i,
+                "item_description": item.get("description"),
+                "quantity": num(item.get("quantity")),
+                "unit_price": num(item.get("unit_price")),
+                "line_total": num(item.get("line_total")),
+                "tax_amount": num(item.get("tax_amount")),
+                "category": item.get("category"),
+            }
+            item_ws.append([item_row.get(h) for h in ITEM_HEADERS])
+        for sheet in (ws, item_ws):
+            sheet.freeze_panes = "A2"
+            sheet.auto_filter.ref = sheet.dimensions
+            for col_idx in range(1, sheet.max_column + 1):
+                max_len = 0
+                for cell in sheet[get_column_letter(col_idx)]:
+                    if cell.value is not None:
+                        max_len = max(max_len, len(str(cell.value)))
+                sheet.column_dimensions[get_column_letter(col_idx)].width = min(max(max_len + 2, 12), 38)
+        wb.save(path)
     return receipt_id
 
 
