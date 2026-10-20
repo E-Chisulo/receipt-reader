@@ -24,7 +24,8 @@ CURRENCY_DEFAULT = "ZMW"
 
 PREDEFINED_CATEGORIES = [
     "Food", "Fuel", "Health", "Internet", "Auto Servicing",
-    "Transport", "Printing", "Laundry", "Barber", "Other"
+    "Transport", "Printing", "Laundry", "Barber", "Farming",
+    "Office Space", "School Fees", "Other"
 ]
 CATEGORY_SHEET_HEADERS = ["Date", "Vendor", "Total", "Currency", "Receipt ID"]
 
@@ -37,6 +38,11 @@ ITEM_HEADERS = [
     "receipt_id", "line_number", "item_description", "quantity", "unit_price",
     "line_total", "tax_amount", "category"
 ]
+
+DEPOSIT_HEADERS = ["deposit_id", "logged_at", "date", "amount", "currency", "account", "source", "notes"]
+TRANSFER_HEADERS = ["transfer_id", "logged_at", "date", "amount", "currency", "from_account", "to_account", "notes"]
+
+ACCOUNTS = ["FNB", "Zanaco", "Stanbic", "Standard Bank", "Airtel Money", "MTN Money", "Cash", "Other"]
 
 MEMORY_FILE = APP_DIR / "merchant_memory.json"
 APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -132,12 +138,40 @@ def ensure_workbook(path: Path):
                 cs.append(CATEGORY_SHEET_HEADERS)
                 _style_header(cs)
                 changed = True
+        if "Deposits" not in wb.sheetnames:
+            ds = wb.create_sheet("Deposits")
+            ds.append(DEPOSIT_HEADERS)
+            _style_header(ds)
+            changed = True
+        if "Transfers" not in wb.sheetnames:
+            ts = wb.create_sheet("Transfers")
+            ts.append(TRANSFER_HEADERS)
+            _style_header(ts)
+            changed = True
         if changed:
             wb.save(path)
 
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def append_deposit(path: Path, date: str, amount: float, currency: str, account: str, source: str, notes: str) -> str:
+    wb = load_workbook(path)
+    ws = wb["Deposits"]
+    did = f"D{datetime.now().strftime('%Y%m%d%H%M%S%f')[:18]}"
+    ws.append([did, datetime.now().isoformat(), date, amount, currency, account, source, notes])
+    wb.save(path)
+    return did
+
+
+def append_transfer(path: Path, date: str, amount: float, currency: str, from_acc: str, to_acc: str, notes: str) -> str:
+    wb = load_workbook(path)
+    ws = wb["Transfers"]
+    tid = f"T{datetime.now().strftime('%Y%m%d%H%M%S%f')[:18]}"
+    ws.append([tid, datetime.now().isoformat(), date, amount, currency, from_acc, to_acc, notes])
+    wb.save(path)
+    return tid
 
 
 def image_to_jpeg_bytes(image_bytes: bytes) -> bytes:
@@ -494,8 +528,7 @@ WORKBOOK_PATH = Path(workbook_text).expanduser()
 MODEL = model_text.strip() or MODEL
 ensure_workbook(WORKBOOK_PATH)
 
-st.write("Position the receipt clearly in front of the camera, then capture one image. Use bright, even lighting and keep the full receipt in frame.")
-tab_upload, tab_cam = st.tabs(["📷 Take Photo", "🖥️ Mac Camera"])
+tab_upload, tab_cam, tab_finance = st.tabs(["📷 Take Photo", "🖥️ Mac Camera", "💰 Deposits & Transfers"])
 with tab_upload:
     st.caption("Tap **Browse** → **Take Photo** for best focus and quality using your iPhone camera.")
     uploaded = st.file_uploader("Receipt image", type=["jpg", "jpeg", "png", "webp", "heic"], label_visibility="collapsed")
@@ -775,6 +808,72 @@ if "last_receipt" in st.session_state:
         import time; time.sleep(1.2)
         del st.session_state["last_receipt"]
         st.rerun()
+
+with tab_finance:
+    st.caption("Log deposits and inter-account transfers. Reconcile with expenses later.")
+    fin_sub = st.radio("Entry type", ["💵 Deposit", "🔄 Transfer"], horizontal=True, label_visibility="collapsed")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    if fin_sub == "💵 Deposit":
+        with st.form("deposit_form", clear_on_submit=True):
+            st.subheader("Log a Deposit")
+            col1, col2 = st.columns(2)
+            dep_date = col1.date_input("Date", value=datetime.now()).strftime("%Y-%m-%d")
+            dep_amount = col2.number_input("Amount", min_value=0.0, step=0.01, format="%.2f")
+            col3, col4 = st.columns(2)
+            dep_currency = col3.selectbox("Currency", ["ZMW", "USD", "ZAR", "GBP"], index=0)
+            dep_account = col4.selectbox("Into account", ACCOUNTS)
+            if dep_account == "Other":
+                dep_account = st.text_input("Account name")
+            dep_source = st.text_input("Source / Description", placeholder="e.g. Client payment, Salary, Sale of goods")
+            dep_notes = st.text_area("Notes (optional)", height=80)
+            if st.form_submit_button("Save Deposit", type="primary"):
+                if dep_amount > 0 and dep_source.strip():
+                    did = append_deposit(WORKBOOK_PATH, dep_date, dep_amount, dep_currency, dep_account, dep_source.strip(), dep_notes.strip())
+                    st.success(f"✅ Deposit saved — {dep_currency} {dep_amount:,.2f} into {dep_account} ({did})")
+                else:
+                    st.warning("Please enter an amount and a source description.")
+
+    else:
+        with st.form("transfer_form", clear_on_submit=True):
+            st.subheader("Log a Transfer")
+            col1, col2 = st.columns(2)
+            tr_date = col1.date_input("Date", value=datetime.now()).strftime("%Y-%m-%d")
+            tr_amount = col2.number_input("Amount", min_value=0.0, step=0.01, format="%.2f")
+            col3, col4 = st.columns(2)
+            tr_currency = col3.selectbox("Currency", ["ZMW", "USD", "ZAR", "GBP"], index=0)
+            tr_from = col4.selectbox("From account", ACCOUNTS)
+            if tr_from == "Other":
+                tr_from = st.text_input("From account name")
+            tr_to = st.selectbox("To account", ACCOUNTS)
+            if tr_to == "Other":
+                tr_to = st.text_input("To account name")
+            tr_notes = st.text_area("Notes (optional)", height=80, placeholder="e.g. Monthly top-up, Float transfer")
+            if st.form_submit_button("Save Transfer", type="primary"):
+                if tr_amount > 0 and tr_from != tr_to:
+                    tid = append_transfer(WORKBOOK_PATH, tr_date, tr_amount, tr_currency, tr_from, tr_to, tr_notes.strip())
+                    st.success(f"✅ Transfer saved — {tr_currency} {tr_amount:,.2f} from {tr_from} → {tr_to} ({tid})")
+                elif tr_from == tr_to:
+                    st.warning("From and To accounts must be different.")
+                else:
+                    st.warning("Please enter an amount.")
+
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("**Recent deposits**")
+        try:
+            dep_df = pd.read_excel(WORKBOOK_PATH, sheet_name="Deposits")
+            st.dataframe(dep_df.tail(10), use_container_width=True, hide_index=True)
+        except Exception:
+            st.caption("No deposits yet.")
+    with col2:
+        st.write("**Recent transfers**")
+        try:
+            tr_df = pd.read_excel(WORKBOOK_PATH, sheet_name="Transfers")
+            st.dataframe(tr_df.tail(10), use_container_width=True, hide_index=True)
+        except Exception:
+            st.caption("No transfers yet.")
 
 st.divider()
 st.subheader("Workbook")
